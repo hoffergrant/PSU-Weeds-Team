@@ -1,2 +1,3 @@
 GGplot2 map creation: https://ggplot2-book.org/maps#sec-sf    Note: the rest of the website this link points to is a great ggplot2 manual
 GGplot2 color palette: https://sape.inf.usi.ch/quick-reference/ggplot2/colour
+GlmmTMB troubleshooting: https://cran.r-project.org/web/packages/glmmTMB/vignettes/troubleshooting.html
