@@ -1,0 +1,117 @@
+---
+title: "Example Effect Size Analysis"
+author: "Grant Hoffer, John Wallace"
+date: "2025-01-31"
+output:
+  pdf_document: default
+  html_document: default
+header-includes:
+  \usepackage{fvextra}
+  \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+
+#This example document is meant to provide an effect size analysis of cover crop treatments on untransformed weed density counts.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60), tidy = TRUE)
+#setwd("D:/Wallace Lab/GROW Data Analysis") #set working directory
+#rm() #remove extra or unwanted objects from global environment
+
+# function to load packages
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# load packages from a set. GMH 1-31-2025; Not all packages are needed for this analysis. This is just a bunch of packages I use across different scripts & it is easier to just leave this in case I need something.
+packages <- c("tidyverse", "cowplot", "lme4","nlme","emmeans","piecewiseSEM","MuMIn",
+              "ape","effects","nlmeU","ggplot2","predictmeans","ggeffects","multcompView",
+              "multcomp","wesanderson","dplyr","partR2","ggsignif","car","broom.mixed", 'r2glmm',
+              "glmmTMB","TMB",'here','janitor','readxl','lubridate','merTools','ggResidpanel')
+ipak(packages)
+```
+
+```{r Density; 28 DAP; Amaranthus only}
+#Density; 28 DAP; Amaranthus only
+
+# DATA & NEW VARIABLES
+#GMH 1-31-2025; for this example to run, 'all_data2.csv' needs downloaded from the GitHub repository
+data <- read.csv('all_data2.csv') #Read data from data set in working directory
+data$year <- as.factor(data$year) #Change variables to different types
+data$cc_trmt <- as.factor(data$cc_trmt)
+data$term_win <- as.integer(data$term_win) # create continuous variable for "CC termination window; 0 to 21 days"
+data$ccbio_Mgha <- data$rye_kgha/1000 #Create new variables from other
+data$siteyear <- data$state_loc_year
+# data$CC_binary <- as.numeric(data$CC_binary) GMH 11-7-2024; This does not exist in my data set
+
+# 1st ORDER SUBSETTING (Remove no cover main plots & PRE split plots)
+data <- subset(data, cc_trmt == "14 DPP"| cc_trmt == "1 DAP"| cc_trmt == "CTL")
+data <- subset(data, h == "UTC")
+# Select 28 DAP, small spp, & drop non-Amaranthus spp
+summary <- subset(data, timing == "28 DAP") #create a new dataframe so original can be recalled in later chunks
+summary <- subset(summary, seed == "small") #Dplyr::filter could be used instead of subsetting each individual parameter to tidy code; this was done to show each individual step.
+summary <- subset(summary, spp_code != "ACCOS") # Remove copperleaf
+# Drop sites or site-years w/ missing data or zero density counts across UTCs
+# summary <- subset(summary, state != "NC")
+summary <- subset(summary, siteyear != "IL-1-23") # No 28 DAP data; Generally provide information on why data was removed
+summary <- subset(summary, siteyear != "IL-2-23") # No 28 DAP data
+summary <- subset(summary, siteyear != "NE-1-23") # Counts too low
+summary <- subset(summary, siteyear != "MD-1-23") # Counts too low
+
+# UNIVARIATE SUMMARY
+summary <- summary %>% # name new dataset (summary) and call raw data set to summarize (data)
+  group_by (siteyear, site, block, spp_code, cc_trmt) %>% # identify explanatory variables you want to summarize over
+  summarise_at(vars(spp_total), funs(sum, length)) # use sum b/c some sites broke quadrat counts out into smaller pieces.
+#print.data.frame(summary) # output summary table
+library(glmmTMB)
+library(piecewiseSEM)
+# ANOVA Zero-inflated models w/ poisson vs. negative binomial distribution 
+m0 <- glmmTMB(sum ~ cc_trmt + (1|siteyear/block), ziformula=~1, family=poisson, data = summary) # poisson
+m1 <- glmmTMB(sum ~ cc_trmt + (1|siteyear/block), ziformula=~1, family=nbinom2, data = summary) # negative binomial
+anova(m0, m1) # Lowest AIC is best model; M1 had lower AIC
+# ANOVA Best-fit model - hypothesis tests 
+m0 <- glmmTMB(sum ~      (1|siteyear/block), ziformula=~1, family=nbinom2, data = summary) # null model
+m1 <- glmmTMB(sum ~ cc_trmt + (1|siteyear/block), ziformula=~1, family=nbinom2, data = summary) # single-factor
+performance::check_overdispersion(m1) #Check model overdispersion for nbinom2 and poisson families only
+summary(m1) #Review a summary of the desired model
+anova(m0, m1)
+r.squaredGLMM(m1) # use delta here for estimate of marginal & conditional coefficients
+library(r2glmm)
+pw <- emmeans(m1, pairwise~cc_trmt, type = "response") #Pairwise comparison of cover crop treatment effects
+cld(pw, Letters = letters, alpha = 0.05) #Assign letters to means comparisons
+em <- emmeans(m1, ~cc_trmt, type = "response") #Generate emmeans of each cover crop treatment to be compared from the desired model
+# Effect size (Odds ratio w/ 95% CIs)
+ct <- contrast(em, method = "pairwise", type = "response") #Contrast emmeans to create odds ratios
+or <- confint(ct) #Produce confidence intervals for odds ratios
+or <- as.data.frame(or) #Coerce emmeans object to be a data frame to plot later
+x <- as.factor(c("1DAP/Std", "1DAP/Ctl", "Std/Ctl")) #Create vector of names for odds ratio comparisons
+es <- as.data.frame(cbind(or,x)) #Attach vector of names to corresponding comparisons in the 'or' data frame
+# Alternative effect size analysis (Convert to Cohen's D?)
+# eff_size(pw, sigma = sigma(m1), edf = df.residual(m1))
+es$x=factor(es$x, levels=c("Std/Ctl", "1DAP/Ctl", "1DAP/Std")) #Reorder comparisons to be desired specific order in plots
+Fig2a <-ggplot(es, aes(x = x, y = ratio, ymin = asymp.LCL, ymax = asymp.UCL, fill = x, color = x)) + # extracted from summary data
+  geom_hline(yintercept = 1, color = "gray50", size=0.75) + # add the 0 line
+  geom_point(size = 5.0, alpha=1.0, position=position_dodge(0.2)) + # go lower with the dodge
+  geom_errorbar(linewidth=1.5, width = 0.0, alpha = 0.8, position=position_dodge(0.2)) + #Geom for adding error bars
+  ggtitle ("Amaranthus density (28 DAP)") + # optional title in quotes
+  theme_minimal () + # several themes available, other: theme_minimal, theme_grey, theme_classic
+  xlab ("Treatment comparison") + #X axis title
+  ylab("Odds Ratio (95% CI)") + #Y axis title
+  theme(legend.position = "none") + #legend placement, can be: right, left, top
+  theme(legend.title=element_blank()) + #removes legend title
+  scale_y_continuous (limits = c(0, 2)) + # y-axis 0 to 2 denotes -1 to 1 effect size
+  scale_fill_manual(values=c("Std/Ctl" = "darkgoldenrod4", "1DAP/Ctl"="olivedrab4", "1DAP/Std"="olivedrab3")) + #Choose desired colors for each comparison
+  scale_color_manual(values=c("Std/Ctl" = "darkgoldenrod4", "1DAP/Ctl"="olivedrab4", "1DAP/Std"="olivedrab3")) +
+  theme(axis.text.x = element_text(size=16)) + # size up axis text 
+  theme(axis.text.y = element_text(size=16)) +
+  theme(axis.title.y = element_text(size=20)) +
+  theme(axis.title.x = element_text(size=20)) +
+  theme(plot.title = element_text(size = 24)) +
+  theme(strip.text.x = element_text(size = 16, face="bold")) +
+  theme(legend.text = element_text(size=10))  
+Fig2a
+#ggsave(file="F:/Wallace Lab/GROW Data Analysis/Figures/grow.f2a.jpg", scale=1.5, width=4.0, height=3.0, units="in", dpi=1200) #Comment and uncomment this line to allow saving the figure when desired. Otherwise, figure will download each time the whole chunk runs.
+
+```
